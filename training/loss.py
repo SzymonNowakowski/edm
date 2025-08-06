@@ -80,3 +80,55 @@ class EDMLoss:
         return loss
 
 #----------------------------------------------------------------------------
+
+class DenoiserError:
+    def __init__(self, log_path='denoiser_l2_norm_squared.log', max_sigma=75.0):
+        self.log_path = log_path
+        self.max_sigma = max_sigma
+        self.rank = dist.get_rank() if dist.is_initialized() else 0
+        self.world_size = dist.get_world_size() if dist.is_initialized() else 1
+
+        if self.rank == 0:
+            os.makedirs(os.path.dirname(self.log_path) or ".", exist_ok=True)
+            self.logger = dnnlib.util.Logger(file=self.log_path, file_mode='a', should_flush=True)
+
+    def __call__(self, net, images, labels, augment_pipe=None):  # augment_pipe unused
+        batch_size = images.shape[0]
+
+        #no gradient accumulation, this is just the measurement
+        with torch.no_grad():
+            # Sample sigma from Uniform(0, max_sigma)
+            sigma = torch.rand([batch_size, 1, 1, 1], device=images.device) * self.max_sigma
+
+            # Generate noisy inputs
+            noise = torch.randn_like(images) * sigma
+            noisy_input = images + noise
+
+            # Run denoiser
+            prediction = net(noisy_input, sigma, labels)
+
+            # Compute L2 error per image
+            per_image_error = ((prediction - images) ** 2).view(batch_size, -1).sum(dim=1)  # shape: [B]
+            sigma_flat = sigma.view(batch_size)
+
+        # Gather across GPUs
+        all_errors = [torch.zeros_like(per_image_error) for _ in range(self.world_size)]
+        all_sigma = [torch.zeros_like(sigma_flat) for _ in range(self.world_size)]
+
+        if self.world_size > 1:
+            dist.all_gather(all_errors, per_image_error)
+            dist.all_gather(all_sigma, sigma_flat)
+        else:
+            all_errors = [per_image_error]
+            all_sigma = [sigma_flat]
+
+        # Log from rank 0
+        if self.rank == 0:
+            errors_cat = torch.cat(all_errors).cpu().tolist()
+            sigmas_cat = torch.cat(all_sigma).cpu().tolist()
+
+            log_line = " ".join(f"{e:.6f}:{s:.6f}" for e, s in zip(errors_cat, sigmas_cat))
+            self.logger.print(log_line)
+
+        # Return dummy zero loss, so the net wouldn't get updated
+        return torch.zeros_like(per_image_error, requires_grad=True)  # [B]
