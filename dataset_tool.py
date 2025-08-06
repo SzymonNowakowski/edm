@@ -436,7 +436,7 @@ def main(
         img = PIL.Image.fromarray(img, {1: 'L', 3: 'RGB'}[channels])
         image_bits = io.BytesIO()
         img.save(image_bits, format='png', compress_level=0, optimize=False)
-        #draw a random integer between 1 and 100 and if it falls <= perc_test and if dest_test is specified, save to test set, if
+        #if dest_test is specified, draw a random integer between 1 and 100 and if it falls <= perc_test, save to test set
         if dest_test is not None and np.random.randint(1, 101) <= perc_test:
             save_bytes_test(os.path.join(archive_root_dir_test, archive_fname), image_bits.getbuffer())
             labels_test.append([archive_fname, image['label']] if image['label'] is not None else None)
@@ -452,8 +452,6 @@ def main(
         metadata_test = {'labels': labels_test if all(x is not None for x in labels_test) else None}
         save_bytes_test(os.path.join(archive_root_dir_test, 'dataset.json'), json.dumps(metadata_test))
         close_dest_test()
-
-
 
 #------------------------
 # ----------------------------------------------------
