@@ -310,6 +310,8 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 @click.command()
 @click.option('--source',     help='Input directory or archive name', metavar='PATH',   type=str, required=True)
 @click.option('--dest',       help='Output directory or archive name', metavar='PATH',  type=str, required=True)
+@click.option('--dest-test',  help='Output directory or archive name for test subset', metavar='PATH', type=str)
+@click.option('--perc-test', help='Percent of images to output to test subset', metavar='INT', type=int, default=10)
 @click.option('--max-images', help='Maximum number of images to output', metavar='INT', type=int)
 @click.option('--transform',  help='Input crop/resize mode', metavar='MODE',            type=click.Choice(['center-crop', 'center-crop-wide']))
 @click.option('--resolution', help='Output resolution (e.g., 512x512)', metavar='WxH',  type=parse_tuple)
@@ -317,6 +319,8 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 def main(
     source: str,
     dest: str,
+    dest_test: Optional[str],
+    perc_test: int,
     max_images: Optional[int],
     transform: Optional[str],
     resolution: Optional[Tuple[int, int]]
@@ -385,8 +389,14 @@ def main(
     if dest == '':
         raise click.ClickException('--dest output filename or directory must not be an empty string')
 
+    if dest_test is not None and dest_test == '':
+        raise click.ClickException('--dest-test output filename or directory must not be an empty string (if specified)')
+
+
     num_files, input_iter = open_dataset(source, max_images=max_images)
     archive_root_dir, save_bytes, close_dest = open_dest(dest)
+    if dest_test is not None:
+        archive_root_dir_test, save_bytes_test, close_dest_test = open_dest(dest_test)
 
     if resolution is None: resolution = (None, None)
     transform_image = make_transform(transform, *resolution)
@@ -394,6 +404,7 @@ def main(
     dataset_attrs = None
 
     labels = []
+    labels_test = []
     for idx, image in tqdm(enumerate(input_iter), total=num_files):
         idx_str = f'{idx:08d}'
         archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
@@ -425,14 +436,27 @@ def main(
         img = PIL.Image.fromarray(img, {1: 'L', 3: 'RGB'}[channels])
         image_bits = io.BytesIO()
         img.save(image_bits, format='png', compress_level=0, optimize=False)
-        save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
-        labels.append([archive_fname, image['label']] if image['label'] is not None else None)
+        #draw a random integer between 1 and 100 and if it falls <= perc_test and if dest_test is specified, save to test set, if
+        if dest_test is not None and np.random.randint(1, 101) <= perc_test:
+            save_bytes_test(os.path.join(archive_root_dir_test, archive_fname), image_bits.getbuffer())
+            labels_test.append([archive_fname, image['label']] if image['label'] is not None else None)
+        else:
+            save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
+            labels.append([archive_fname, image['label']] if image['label'] is not None else None)
 
     metadata = {'labels': labels if all(x is not None for x in labels) else None}
     save_bytes(os.path.join(archive_root_dir, 'dataset.json'), json.dumps(metadata))
     close_dest()
 
-#----------------------------------------------------------------------------
+    if dest_test is not None:
+        metadata_test = {'labels': labels_test if all(x is not None for x in labels_test) else None}
+        save_bytes_test(os.path.join(archive_root_dir_test, 'dataset.json'), json.dumps(metadata_test))
+        close_dest_test()
+
+
+
+#------------------------
+# ----------------------------------------------------
 
 if __name__ == "__main__":
     main()
