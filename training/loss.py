@@ -12,7 +12,8 @@ import torch
 from torch_utils import persistence
 from torch_utils.git_commit_hash import get_git_commit_hash_from_marker
 import torch.distributed as dist
-
+import os
+import dnnlib
 #----------------------------------------------------------------------------
 # Loss function corresponding to the variance preserving (VP) formulation
 # from the paper "Score-Based Generative Modeling through Stochastic
@@ -84,6 +85,9 @@ class EDMLoss:
 #----------------------------------------------------------------------------
 
 class DenoiserError:
+    # the below log_path (and the commit hash)
+    # are created at the time of import, not execution,
+    # which is perfectly fine and intentional
     def __init__(self, log_path='%s_denoiser_l2_norm_squared.log'%get_git_commit_hash_from_marker(), max_sigma=75.0):
         self.log_path = log_path
         self.max_sigma = max_sigma
