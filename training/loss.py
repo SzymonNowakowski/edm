@@ -10,6 +10,7 @@
 
 import torch
 from torch_utils import persistence
+from torch_utils.git_commit_hash import get_git_commit_hash_from_marker
 
 #----------------------------------------------------------------------------
 # Loss function corresponding to the variance preserving (VP) formulation
@@ -82,7 +83,7 @@ class EDMLoss:
 #----------------------------------------------------------------------------
 
 class DenoiserError:
-    def __init__(self, log_path='denoiser_l2_norm_squared.log', max_sigma=75.0):
+    def __init__(self, log_path='%s_denoiser_l2_norm_squared.log'%get_git_commit_hash_from_marker(), max_sigma=75.0):
         self.log_path = log_path
         self.max_sigma = max_sigma
         self.rank = dist.get_rank() if dist.is_initialized() else 0
