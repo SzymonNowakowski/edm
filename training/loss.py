@@ -96,7 +96,6 @@ class DenoiserError:
 
         if self.rank == 0:
             os.makedirs(os.path.dirname(self.log_path) or ".", exist_ok=True)
-            self.logger = dnnlib.util.Logger(file_name=self.log_path, file_mode='a', should_flush=True)
 
     def __call__(self, net, images, labels, augment_pipe=None):  # augment_pipe unused
         batch_size = images.shape[0]
@@ -134,8 +133,10 @@ class DenoiserError:
             sigmas_cat = torch.cat(all_sigma).cpu().tolist()
 
             log_line = " ".join(f"{e:.6f}:{s:.6f}" for e, s in zip(errors_cat, sigmas_cat))
-            # global stdout redirected by Logger to the log file
-            print(log_line)
+
+            # not using Logger; append directly to avoid interfering with pickling
+            with open(self.log_path, "a") as f:
+                f.write(log_line + "\n")
 
         # Return dummy zero loss, so the net wouldn't get updated
         return torch.zeros_like(per_image_error, requires_grad=True)  # [B]
