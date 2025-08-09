@@ -4,7 +4,7 @@ set -euo pipefail
 # ---- config ----
 DEST="wim:~/edm"                # scp target
 DIST_DIR="dist"                 # local output dir for tarballs
-MARKER_FILENAME="__COMMIT.txt"  # fixed marker filename at project root in tarball
+MARKER_FILENAME="__COMMIT.txt"  # fixed marker filename at repo root in tarball
 
 # ---- usage ----
 if [ $# -lt 1 ]; then
@@ -31,7 +31,7 @@ fi
 # ---- capture metadata ----
 HASH=$(git rev-parse --short=8 HEAD)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-STAMP=$(date +%Y%m%dT%H%M%S)   # lokalny czas, bez _CEST ani %Z
+STAMP=$(date +%Y%m%dT%H%M%S)   # lokalny czas
 PROJECT=$(basename "$(git rev-parse --show-toplevel)")
 
 # ---- build a clean export of EXACT commit (tracked files only) ----
@@ -39,11 +39,11 @@ TMPDIR=$(mktemp -d)
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
-# Extract commit snapshot under a top-level project dir
-git archive --format=tar --prefix="${PROJECT}/" HEAD | tar -x -C "$TMPDIR"
+# UWAGA: bez --prefix -> pliki trafią bezpośrednio do TMPDIR (bez dodatkowego katalogu)
+git archive --format=tar HEAD | tar -x -C "$TMPDIR"
 
-# ---- write marker file into the EXPORTED tree (project root) ----
-MARKER_PATH="${TMPDIR}/${PROJECT}/${MARKER_FILENAME}"
+# ---- write marker file at repo root inside the export ----
+MARKER_PATH="${TMPDIR}/${MARKER_FILENAME}"
 {
   echo "project:  ${PROJECT}"
   echo "commit:   ${HASH}"
@@ -52,10 +52,11 @@ MARKER_PATH="${TMPDIR}/${PROJECT}/${MARKER_FILENAME}"
   echo "message:  ${MSG}"
 } > "$MARKER_PATH"
 
-# ---- pack tar.gz ----
+# ---- pack tar.gz with files at top-level (no extra dir) ----
 mkdir -p "$DIST_DIR"
 TARBALL="${DIST_DIR}/${PROJECT}-${HASH}-${STAMP}.tar.gz"
-tar -C "$TMPDIR" -czf "$TARBALL" "${PROJECT}"
+# pakujemy CAŁĄ zawartość TMPDIR jako top-level
+tar -C "$TMPDIR" -czf "$TARBALL" .
 
 echo "Created: $TARBALL"
 
