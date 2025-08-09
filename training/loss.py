@@ -11,6 +11,7 @@
 import torch
 from torch_utils import persistence
 from torch_utils.git_commit_hash import get_git_commit_hash_from_marker
+import torch.distributed as dist
 
 #----------------------------------------------------------------------------
 # Loss function corresponding to the variance preserving (VP) formulation
