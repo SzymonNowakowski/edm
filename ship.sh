@@ -24,6 +24,12 @@ if ! git commit -am "$MSG" ; then
   exit 1
 fi
 
+# ---- push changes; abort if failed ----
+if ! git push ; then
+  echo "Push failed. Aborting."
+  exit 1
+fi
+
 # ---- capture metadata ----
 HASH=$(git rev-parse --short=8 HEAD)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
