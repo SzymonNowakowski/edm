@@ -31,7 +31,7 @@ fi
 # ---- capture metadata ----
 HASH=$(git rev-parse --short=8 HEAD)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-STAMP=$(date +%Y%m%dT%H%M%S_$(date +%Z))
+STAMP=$(date +%Y%m%dT%H%M%S)   # lokalny czas, bez _CEST ani %Z
 PROJECT=$(basename "$(git rev-parse --show-toplevel)")
 
 # ---- build a clean export of EXACT commit (tracked files only) ----
