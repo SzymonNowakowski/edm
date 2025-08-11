@@ -3,6 +3,6 @@
 fname="$1"
 jobname="${fname%.lsf}"
 bsub -J "$jobname" \
-     -o "${jobname}_%J.out" \
-     -e "${jobname}_%J.err" \
+     -o "edm_${jobname}_%J.out" \
+     -e "edm_${jobname}_%J.err" \
      < "$fname"
