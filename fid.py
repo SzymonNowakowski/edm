@@ -31,7 +31,7 @@ def calculate_inception_stats(
     # Load Inception-v3 model.
     # This is a direct PyTorch translation of http://download.tensorflow.org/models/image/imagenet/inception-2015-12-05.tgz
     dist.print0('Loading Inception-v3 model...')
-    detector_url = 'https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan3/versions/1/files/metrics/inception-2015-12-05.pkl'
+    detector_url = 'fid/inception-2015-12-05.pkl'
     detector_kwargs = dict(return_features=True)
     feature_dim = 2048
     with dnnlib.util.open_url(detector_url, verbose=(dist.get_rank() == 0)) as f:
