@@ -1,0 +1,5 @@
+# Force LF on Unix-y text files
+*.sh   text eol=lf
+*.lsf  text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
