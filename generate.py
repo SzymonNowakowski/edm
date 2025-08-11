@@ -173,6 +173,20 @@ def ablation_sampler(
             d_prime = (sigma_deriv(t_prime) / sigma(t_prime) + s_deriv(t_prime) / s(t_prime)) * x_prime - sigma_deriv(t_prime) * s(t_prime) / sigma(t_prime) * denoised
             x_next = x_hat + h * ((1 - 1 / (2 * alpha)) * d_cur + 1 / (2 * alpha) * d_prime)
 
+        # --- NEW: add stochasticity in VP when SNR = (sigma/alpha)^2 is low.
+        # We interpret alpha(t) := s(t) for VP scaling, so SNR(t) = (sigma(t)/s(t))^2.
+        if schedule == 'vp':
+            # Use the *current* effective time t_hat (the step we just integrated from)
+            # and the *next* time t_next as "previous step" in your description.
+            snr_cur = (sigma(t_hat) / s(t_hat)) ** 2
+            if snr_cur < 100:
+                snr_next = (sigma(t_next) / s(t_next)) ** 2
+                # gamma^{-1} = SNR(next) / SNR(cur)
+                gamma_inv = snr_next / torch.clamp(snr_cur, min=torch.finfo(torch.float64).eps)
+                # Noise magnitude = sqrt(1 - gamma^{-1}); clip to [0, 1] to be safe.
+                noise_mag = torch.sqrt(torch.clamp(1.0 - gamma_inv, min=0.0, max=1.0))
+                # Add noise in the x-space; scale by s(t_next) to match the state scaling.
+                x_next = x_next + s(t_next) * noise_mag * randn_like(x_next)
     return x_next
 
 #----------------------------------------------------------------------------
