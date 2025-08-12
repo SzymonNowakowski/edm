@@ -86,8 +86,7 @@ def edm_sampler(
             d_prime = (x_next - denoised) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
 
-        x_cur = x_next
-        prev_sigma_hat = t_hat.detach()  # tu zapamiętujemy sigma_{t+1} jako zaokrąglone post-churn
+        prev_t = t_hat.detach()  # assign "t+1" for the next iteration
 
     return x_next
 
