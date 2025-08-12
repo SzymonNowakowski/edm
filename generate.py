@@ -58,15 +58,18 @@ def edm_sampler(
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
 
         # --- NEW: always add noise when SNR(t_hat) < 100
-        # In EDM, alpha ≡ 1, so SNR(t) = (sigma/alpha)^2 = t^2.
+        # --- FIXED: scaled by t_next
+        # In EDM, alpha ≡ 1, so SNR(t) = t^2.
         SNR_THRESH = 100.0
-        snr_cur = (t_hat ** 2)  # SNR at current (post-churn) time
-        if (snr_cur < SNR_THRESH):
+        eps = torch.finfo(torch.float64).eps
+        snr_cur = t_hat ** 2
+        if snr_cur < SNR_THRESH:
             # gamma^{-1} = SNR(next) / SNR(cur) = (t_next^2 / t_hat^2) ∈ [0, 1]
-            eps = torch.finfo(torch.float64).eps
             gamma_inv = (t_next ** 2) / torch.clamp(snr_cur, min=eps)
             noise_mag = torch.sqrt(torch.clamp(1.0 - gamma_inv, min=0.0, max=1.0))
-            x_next = x_next + noise_mag * randn_like(x_next)
+            # scale by next sigma (just like other stochastic terms in EDM)
+            x_next = x_next + t_next * noise_mag * randn_like(x_next)
+            
     return x_next
 
 #----------------------------------------------------------------------------
