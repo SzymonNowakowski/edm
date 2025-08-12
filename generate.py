@@ -56,8 +56,9 @@ def edm_sampler(
             x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
 
             # eta = sqrt(1 - sigma_t^2 / sigma_{t+1}^2)
-            eta = torch.sqrt(torch.clamp(1.0 - (sigma_t ** 2) / torch.clamp(sigma_tp1 ** 2, min=1e-20), min=0.0))
-            sqrt1m = torch.sqrt(torch.clamp(1.0 - eta ** 2, min=0.0))
+            ratio = torch.clamp(sigma_t / torch.clamp(sigma_tp1, min=1e-20), max=1.0)  # == sigma_t / sigma_{t+1}
+            sqrt1m = ratio  # = sqrt(1 - eta^2)
+            eta = torch.sqrt(torch.clamp(1.0 - ratio * ratio, min=0.0))
 
             # (alpha==1 => coef_X0 = 1 - coef_Xt)
             coef_Xt = (sigma_tm1 / torch.clamp(sigma_t, min=1e-20)) * sqrt1m
@@ -86,7 +87,7 @@ def edm_sampler(
             d_prime = (x_next - denoised) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
 
-        prev_t = t_hat.detach()  # assign "t+1" for the next iteration
+        prev_t = net.round_sigma(t_cur).detach()    # assign "t+1" for the next iteration
 
     return x_next
 
