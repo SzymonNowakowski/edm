@@ -45,48 +45,36 @@ def edm_sampler(
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])): # 0, ..., N-1
         x_cur = x_next
 
-        # === ALT step with selected SNR
-        t_plain = net.round_sigma(t_cur)  # no churn, only rounded sigma as in original edm
-        if t_plain < 0.6 and t_plain>0.03:
-            sigma_t = t_plain  # current sigma from harmonogram
-            sigma_tm1 = t_next  # next, smaller sigma from harmonogram
-            sigma_tp1 = prev_t if prev_t is not None else sigma_t  # "t+1" from previous iteration
+        # === ALT step with Heun drift + calibrated noise ===
+        t_plain = net.round_sigma(t_cur)  # no churn; only rounded sigma as in original EDM
+        if (t_plain < 0.6) and (t_plain > 0.03):
+            sigma_t = t_plain  # current sigma from schedule
+            sigma_tm1 = t_next  # next (smaller) sigma from schedule
+            sigma_tp1 = prev_t if prev_t is not None else sigma_t  # "t+1" (previous, larger sigma)
 
-            # EDM net returns  ~X0 (pre/post-scaling inside)
-            x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
-
-            # eta = sqrt(1 - sigma_t^2 / sigma_{t+1}^2)
-            ratio = torch.clamp(sigma_t / torch.clamp(sigma_tp1, min=1e-20), max=1.0)  # == sigma_t / sigma_{t+1}
-            sqrt1m = ratio  # = sqrt(1 - eta^2)
+            # eta = sqrt(1 - (sigma_t / sigma_{t+1})^2)
+            ratio = torch.clamp(sigma_t / torch.clamp(sigma_tp1, min=1e-20), max=1.0)
             eta = torch.sqrt(torch.clamp(1.0 - ratio * ratio, min=0.0))
 
-            # (alpha==1 => coef_X0 = 1 - coef_Xt)
-            coef_Xt = (sigma_tm1 / torch.clamp(sigma_t, min=1e-20)) * sqrt1m
-            coef_X0 = 1.0 - coef_Xt
-            coef_eps = sigma_tm1 * eta
+            # --- Deterministic Heun step on EDM drift: d = (x - D_theta)/sigma ---
+            den_t = net(x_cur, sigma_t, class_labels).to(torch.float64)
+            d_cur = (x_cur - den_t) / sigma_t
+            x_pred = x_cur + (sigma_tm1 - sigma_t) * d_cur  # Euler predictor
 
-            # x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
-            
-            # Heun predictor–corrector for the ALT step (replaces the last line)
-            eps = randn_like(x_cur)
-            x_hat_alt = x_cur + coef_eps * eps  # ALT "churn" noise (use same eps for predictor+corrector)
-
-            # Predictor (Euler) at sigma_t
-            den_t = net(x_hat_alt, sigma_t, class_labels).to(torch.float64)
-            d_cur = (x_hat_alt - den_t) / sigma_t
-            x_euler = x_hat_alt + (sigma_tm1 - sigma_t) * d_cur
-
-            # Corrector (second slope at sigma_tm1)
             if i < num_steps - 1:
-                den_next = net(x_euler, sigma_tm1, class_labels).to(torch.float64)
-                d_prime = (x_euler - den_next) / sigma_tm1
-                x_next = x_hat_alt + (sigma_tm1 - sigma_t) * (0.5 * d_cur + 0.5 * d_prime)
+                den_next = net(x_pred, sigma_tm1, class_labels).to(torch.float64)
+                d_prime = (x_pred - den_next) / sigma_tm1
+                x_mean = x_cur + (sigma_tm1 - sigma_t) * (0.5 * d_cur + 0.5 * d_prime)  # Heun corrected mean
             else:
-                x_next = x_euler
+                x_mean = x_pred
 
+            # --- Stochastic part added AFTER drift to match target transition variance ---
+            x_next = x_mean + (sigma_tm1 * eta) * randn_like(x_cur)
 
-            prev_t = sigma_t.detach()  # assign "t+1" for the next iteration
-            continue  # <<< DO NOT FOLLOW ORIGINAL CHURN PATH >>>
+            # cache "t+1" consistent with the condition (pre-churn)
+            prev_t = net.round_sigma(t_cur).detach()
+            continue  # <<< DO NOT FOLLOW ORIGINAL EDM PATH BELOW
+
         # if the condition above is not met, we follow the original EDM path
 
         # Increase noise temporarily.
