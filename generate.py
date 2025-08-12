@@ -47,7 +47,7 @@ def edm_sampler(
 
         # === ALT step with selected SNR
         t_plain = net.round_sigma(t_cur)  # no churn, only rounded sigma as in original edm
-        if t_plain < 1:
+        if t_plain < 1 and t_plain > 0.01:
             sigma_t = t_plain  # current sigma from harmonogram
             sigma_tm1 = t_next  # next, smaller sigma from harmonogram
             sigma_tp1 = prev_t if prev_t is not None else sigma_t  # "t+1" from previous iteration
