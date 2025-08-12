@@ -47,7 +47,7 @@ def edm_sampler(
 
         # === ALT step with selected SNR
         t_plain = net.round_sigma(t_cur)  # no churn, only rounded sigma as in original edm
-        if t_plain < 1 and t_plain > 0.01:
+        if t_plain < 0:
             sigma_t = t_plain  # current sigma from harmonogram
             sigma_tm1 = t_next  # next, smaller sigma from harmonogram
             sigma_tp1 = prev_t if prev_t is not None else sigma_t  # "t+1" from previous iteration
@@ -81,11 +81,13 @@ def edm_sampler(
         d_cur = (x_hat - denoised) / t_hat
         x_next = x_hat + (t_next - t_hat) * d_cur
 
+        '''turn that off for now
         # Apply 2nd order correction.
         if i < num_steps - 1:
             denoised = net(x_next, t_next, class_labels).to(torch.float64)
             d_prime = (x_next - denoised) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
+        '''
 
         prev_t = net.round_sigma(t_cur).detach()    # assign "t+1" for the next iteration
 
