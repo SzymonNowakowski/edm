@@ -58,7 +58,7 @@ def edm_sampler(
             # eta = sqrt(1 - sigma_t^2 / sigma_{t+1}^2)
             ratio = torch.clamp(sigma_t / torch.clamp(sigma_tp1, min=1e-20), max=1.0)  # == sigma_t / sigma_{t+1}
             sqrt1m = ratio  # = sqrt(1 - eta^2)
-            eta = 0.35*torch.sqrt(torch.clamp(1.0 - ratio * ratio, min=0.0))
+            eta = torch.sqrt(torch.clamp(1.0 - ratio * ratio, min=0.0))
 
             # (alpha==1 => coef_X0 = 1 - coef_Xt)
             coef_Xt = (sigma_tm1 / torch.clamp(sigma_t, min=1e-20)) * sqrt1m
