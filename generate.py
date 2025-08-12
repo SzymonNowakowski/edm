@@ -65,8 +65,24 @@ def edm_sampler(
             coef_X0 = 1.0 - coef_Xt
             coef_eps = sigma_tm1 * eta
 
-            x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
+            # x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
+            
+            # Heun predictor–corrector for the ALT step (replaces the last line)
+            eps = randn_like(x_cur)
+            x_hat_alt = x_cur + coef_eps * eps  # ALT "churn" noise (use same eps for predictor+corrector)
 
+            # Predictor (Euler) at sigma_t
+            den_t = net(x_hat_alt, sigma_t, class_labels).to(torch.float64)
+            d_cur = (x_hat_alt - den_t) / sigma_t
+            x_euler = x_hat_alt + (sigma_tm1 - sigma_t) * d_cur
+
+            # Corrector (second slope at sigma_tm1)
+            if i < num_steps - 1:
+                den_next = net(x_euler, sigma_tm1, class_labels).to(torch.float64)
+                d_prime = (x_euler - den_next) / sigma_tm1
+                x_next = x_hat_alt + (sigma_tm1 - sigma_t) * (0.5 * d_cur + 0.5 * d_prime)
+            else:
+                x_next = x_euler
 
 
             prev_t = sigma_t.detach()  # assign "t+1" for the next iteration
