@@ -38,8 +38,37 @@ def edm_sampler(
 
     # Main sampling loop.
     x_next = latents.to(torch.float64) * t_steps[0]
+
+    prev_t = None  # t_{t+1} from previous iteration
+
+
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])): # 0, ..., N-1
         x_cur = x_next
+
+        # === ALT step with selected SNR
+        t_plain = net.round_sigma(t_cur)  # no churn, only rounded sigma as in original edm
+        if t_plain < 10:
+            sigma_t = t_plain  # current sigma from harmonogram
+            sigma_tm1 = t_next  # next, smaller sigma from harmonogram
+            sigma_tp1 = prev_t if prev_t is not None else sigma_t  # "t+1" from previous iteration
+
+            # EDM net returns  ~X0 (pre/post-scaling inside)
+            x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
+
+            # eta = sqrt(1 - sigma_t^2 / sigma_{t+1}^2)
+            eta = torch.sqrt(torch.clamp(1.0 - (sigma_t ** 2) / torch.clamp(sigma_tp1 ** 2, min=1e-20), min=0.0))
+            sqrt1m = torch.sqrt(torch.clamp(1.0 - eta ** 2, min=0.0))
+
+            # (alpha==1 => coef_X0 = 1 - coef_Xt)
+            coef_Xt = (sigma_tm1 / torch.clamp(sigma_t, min=1e-20)) * sqrt1m
+            coef_X0 = 1.0 - coef_Xt
+            coef_eps = sigma_tm1 * eta
+
+            x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
+
+            prev_t = sigma_t.detach()  # assign "t+1" for the next iteration
+            continue  # <<< DO NOT FOLLOW ORIGINAL CHURN PATH >>>
+        # if the condition above is not met, we follow the original EDM path
 
         # Increase noise temporarily.
         gamma = min(S_churn / num_steps, np.sqrt(2) - 1) if S_min <= t_cur <= S_max else 0
@@ -57,19 +86,9 @@ def edm_sampler(
             d_prime = (x_next - denoised) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
 
-        # --- NEW: always add noise when SNR(t_hat) < 100
-        # --- FIXED: scaled by t_next
-        # In EDM, alpha ≡ 1, so SNR(t) = t^2.
-        SNR_THRESH = 100.0
-        eps = torch.finfo(torch.float64).eps
-        snr_cur = t_hat ** 2
-        if snr_cur < SNR_THRESH:
-            # gamma^{-1} = SNR(next) / SNR(cur) = (t_next^2 / t_hat^2) ∈ [0, 1]
-            gamma_inv = (t_next ** 2) / torch.clamp(snr_cur, min=eps)
-            noise_mag = torch.sqrt(torch.clamp(1.0 - gamma_inv, min=0.0, max=1.0))
-            # scale by next sigma (just like other stochastic terms in EDM)
-            x_next = x_next + t_next * noise_mag * randn_like(x_next)
-            
+        x_cur = x_next
+        prev_sigma_hat = t_hat.detach()  # tu zapamiętujemy sigma_{t+1} jako zaokrąglone post-churn
+
     return x_next
 
 #----------------------------------------------------------------------------
