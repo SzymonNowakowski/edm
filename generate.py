@@ -67,6 +67,8 @@ def edm_sampler(
 
             x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
 
+
+
             prev_t = sigma_t.detach()  # assign "t+1" for the next iteration
             continue  # <<< DO NOT FOLLOW ORIGINAL CHURN PATH >>>
         # if the condition above is not met, we follow the original EDM path
@@ -81,13 +83,11 @@ def edm_sampler(
         d_cur = (x_hat - denoised) / t_hat
         x_next = x_hat + (t_next - t_hat) * d_cur
 
-        '''turn that off for now
         # Apply 2nd order correction.
         if i < num_steps - 1:
             denoised = net(x_next, t_next, class_labels).to(torch.float64)
             d_prime = (x_next - denoised) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
-        '''
 
         prev_t = net.round_sigma(t_cur).detach()    # assign "t+1" for the next iteration
 
