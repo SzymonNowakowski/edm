@@ -31,31 +31,41 @@ def edm_sampler(
     sigma_min = max(sigma_min, net.sigma_min)
     sigma_max = min(sigma_max, net.sigma_max)
 
-    # Time step discretization.
+    ############ Time step discretization.
     step_indices = torch.arange(num_steps, dtype=torch.float64, device=latents.device)
+    # Create the index vector [0, 1, ..., num_steps-1] on the same device as latents, in float64.
+    # We’ll use these indices to build the noise schedule.
+
     t_steps = (sigma_max ** (1 / rho) + step_indices / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+    # This is the Karras (EDM) sigma schedule.
+    # It linearly interpolates between sigma_max^(1/ρ) and sigma_min^(1/ρ) and then raises back to the power ρ.
+    # Result: a monotone decreasing sequence from sigma_max down to sigma_min, spaced more densely at small sigmas when ρ>1 (commonly ρ=7).
+
     t_steps = torch.cat([net.round_sigma(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
+    # Round each sigma to the network’s supported grid (round_sigma) so the model’s preconditioning (c_in/c_out/etc.) matches training.
+    # Append an extra 0 at the end so the list length is num_steps+1.
 
-    # Main sampling loop.
+    ############## Main sampling loop.
     x_next = latents.to(torch.float64) * t_steps[0]
-
-    prev_t = None  # t_{t+1} from previous iteration
-
+    # Initialize the state at the highest noise level (t_steps[0] ≈ sigma_max).
+    # latents is expected to be standard Gaussian noise ~ N(0, I) of shape [N, C, H, W] (or whatever your model uses).
+    # Multiplying by sigma_max gives a draw from N(0, sigma_max^2 I), which is the usual EDM starting point (pure noise).
+    # It’s cast to float64 to match the integrator’s dtype.
 
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])): # 0, ..., N-1
+        # iterate over pairs (t_cur, t_next); the final pair ends at exactly zero noise.
         x_cur = x_next
 
         # === ALT step with Heun drift + calibrated noise ===
-        t_plain = net.round_sigma(t_cur)  # no churn; only rounded sigma as in original EDM
-        if (t_plain < 0.6) and (t_plain > 0.03):
-            sigma_t = t_plain  # current sigma from schedule
+        if (t_cur < 0.6) and (t_cur > 0.03):
+            sigma_t = net.round_sigma(t_cur)  # no churn; only rounded sigma as in original EDM
             sigma_tm1 = t_next  # next (smaller) sigma from schedule
-            sigma_tp1 = prev_t if prev_t is not None else sigma_t  # "t+1" (previous, larger sigma)
 
-            # eta = sqrt(1 - (sigma_t / sigma_{t+1})^2)
-            ratio = torch.clamp(sigma_t / torch.clamp(sigma_tp1, min=1e-20), max=1.0)
-            eta = torch.sqrt(torch.clamp(1.0 - ratio * ratio, min=0.0))
+            gamma_tm1_reciprocal_sqrt = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20), max=1.0)  # == sigma_tm1 / sigma_{t}
+            eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal_sqrt * gamma_tm1_reciprocal_sqrt, min=0.0))
 
+
+            '''  Euler+Heun
             # --- Deterministic Heun step on EDM drift: d = (x - D_theta)/sigma ---
             den_t = net(x_cur, sigma_t, class_labels).to(torch.float64)
             d_cur = (x_cur - den_t) / sigma_t
@@ -67,31 +77,63 @@ def edm_sampler(
                 x_mean = x_cur + (sigma_tm1 - sigma_t) * (0.5 * d_cur + 0.5 * d_prime)  # Heun corrected mean
             else:
                 x_mean = x_pred
+            
 
             # --- Stochastic part added AFTER drift to match target transition variance ---
             x_next = x_mean + (sigma_tm1 * eta) * randn_like(x_cur)
+            '''
 
-            # cache "t+1" consistent with the condition (pre-churn)
-            prev_t = net.round_sigma(t_cur).detach()
+            # EDM net returns  ~X0 (pre/post-scaling inside)
+            x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
+
+
+            # (alpha==1 => coef_X0 = 1 - coef_Xt)
+            coef_Xt = (sigma_tm1 / torch.clamp(sigma_t, min=1e-20)) * gamma_tm1_reciprocal_sqrt
+            coef_X0 = sigma_tm1 * (sigma_tm1 - sigma_t * gamma_tm1_reciprocal_sqrt)
+            coef_eps = sigma_tm1 * eta_optim_tm1
+
+            x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
             continue  # <<< DO NOT FOLLOW ORIGINAL EDM PATH BELOW
 
         # if the condition above is not met, we follow the original EDM path
 
-        # Increase noise temporarily.
+        ####### Increase noise temporarily.
         gamma = min(S_churn / num_steps, np.sqrt(2) - 1) if S_min <= t_cur <= S_max else 0
+        # Purpose: decide how much extra noise (“churn”) to add this step.
+        # S_churn/num_steps spreads the total churn over all steps.
+        # It’s capped by sqrt(2)-1 ≈ 0.414 so the temporary σ can’t grow by more than ×√2.
+        # Churn only happens if the current noise level t_cur is in the window [S_min, S_max]; otherwise gamma=0.
+
         t_hat = net.round_sigma(t_cur + gamma * t_cur)
+        # Compute the “churned” sigma: t_hat = (1 + gamma) * t_cur.
+        # Then round it to the network’s supported σ grid (round_sigma) to match the model’s preconditioning table.
+
         x_hat = x_cur + (t_hat ** 2 - t_cur ** 2).sqrt() * S_noise * randn_like(x_cur)
+        # Add just enough Gaussian noise so the total variance goes from t_cur^2 up to t_hat^2.
+        # The std of the injected noise is sqrt(t_hat^2 - t_cur^2), optionally scaled by S_noise (default 1).
+        # Result: x_hat has the same mean as x_cur, but a temporarily higher σ (t_hat).
 
-        # Euler step.
+        ############ Euler step.
         denoised = net(x_hat, t_hat, class_labels).to(torch.float64)
-        d_cur = (x_hat - denoised) / t_hat
-        x_next = x_hat + (t_next - t_hat) * d_cur
+        # Run the denoiser at the churned state (x_hat, t_hat).
+        # In EDM, net(·, σ) returns an estimate of the clean image \hat X_0 (pre/post-scaling is internal).
+        # Cast to float64 for a bit more numerical stability during integration.
 
-        # Apply 2nd order correction.
-        if i < num_steps - 1:
+        d_cur = (x_hat - denoised) / t_hat
+        # Compute the ODE slope at (x_hat, t_hat).
+        # For the EDM probability-flow ODE, dx/dσ = (x - X0)/σ. Replacing X0 by denoised gives this slope.
+
+        x_next = x_hat + (t_next - t_hat) * d_cur
+        # Explicit Euler update: move from σ = t_hat down to the scheduled next σ = t_next using slope d_cur.
+
+        ####### Apply 2nd order (Heun) correction.
+        if i < num_steps - 1:  # Heun (prediction–correction) is only applied if there is another step after this.
             denoised = net(x_next, t_next, class_labels).to(torch.float64)
             d_prime = (x_next - denoised) / t_next
+            # Prediction: Re-evaluate the slope at the end of the interval (x_next, t_next).
+
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
+            # Heun correction (2nd order): replace the Euler result by the trapezoidal rule—average of start/end slopes times the step size, applied from the same base point x_hat.
 
         prev_t = net.round_sigma(t_cur).detach()    # assign "t+1" for the next iteration
 
