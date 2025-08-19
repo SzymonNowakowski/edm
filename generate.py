@@ -56,13 +56,13 @@ def edm_sampler(
         # iterate over pairs (t_cur, t_next); the final pair ends at exactly zero noise.
         x_cur = x_next
 
-        # === ALT step with Heun drift + calibrated noise ===
+        # === ALT step optimal noise ===
         if (t_cur < 0.6) and (t_cur > 0.03):
-            sigma_t = net.round_sigma(t_cur)  # no churn; only rounded sigma as in original EDM
+            sigma_t = t_cur     # it has already been rounded to the network's supported grid
             sigma_tm1 = t_next  # next (smaller) sigma from schedule
 
-            gamma_tm1_reciprocal_sqrt = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20), max=1.0)  # == sigma_tm1 / sigma_{t}
-            eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal_sqrt * gamma_tm1_reciprocal_sqrt, min=0.0))
+            gamma_tm1_reciprocal = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20), max=1.0) ** 2  # == sigma_tm1 / sigma_{t}
+            eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal, min=0.0))
 
 
             '''  Euler+Heun
@@ -88,8 +88,8 @@ def edm_sampler(
 
 
             # (alpha==1 => coef_X0 = 1 - coef_Xt)
-            coef_Xt = (sigma_tm1 / torch.clamp(sigma_t, min=1e-20)) * gamma_tm1_reciprocal_sqrt
-            coef_X0 = sigma_tm1 * (sigma_tm1 - sigma_t * gamma_tm1_reciprocal_sqrt)
+            coef_Xt = gamma_tm1_reciprocal
+            coef_X0 = (1 - coef_Xt)
             coef_eps = sigma_tm1 * eta_optim_tm1
 
             x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
@@ -134,8 +134,6 @@ def edm_sampler(
 
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
             # Heun correction (2nd order): replace the Euler result by the trapezoidal rule—average of start/end slopes times the step size, applied from the same base point x_hat.
-
-        prev_t = net.round_sigma(t_cur).detach()    # assign "t+1" for the next iteration
 
     return x_next
 
