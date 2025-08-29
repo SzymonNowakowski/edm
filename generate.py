@@ -97,24 +97,6 @@ def edm_sampler(
                                                max=1.0) ** 2  # == sigma_tm1 / sigma_{t}
             eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal, min=0.0))
 
-            '''  Euler+Heun
-            # --- Deterministic Heun step on EDM drift: d = (x - D_theta)/sigma ---
-            den_t = net(x_cur, sigma_t, class_labels).to(torch.float64)
-            d_cur = (x_cur - den_t) / sigma_t
-            x_pred = x_cur + (sigma_tm1 - sigma_t) * d_cur  # Euler predictor
-
-            if i < num_steps - 1:
-                den_next = net(x_pred, sigma_tm1, class_labels).to(torch.float64)
-                d_prime = (x_pred - den_next) / sigma_tm1
-                x_mean = x_cur + (sigma_tm1 - sigma_t) * (0.5 * d_cur + 0.5 * d_prime)  # Heun corrected mean
-            else:
-                x_mean = x_pred
-
-
-            # --- Stochastic part added AFTER drift to match target transition variance ---
-            x_next = x_mean + (sigma_tm1 * eta) * randn_like(x_cur)
-            '''
-
             # EDM net returns  ~X0 (pre/post-scaling inside)
             x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
 
@@ -123,8 +105,13 @@ def edm_sampler(
             coef_X0 = (1 - coef_Xt)
             coef_eps = sigma_tm1 * eta_optim_tm1
 
-            x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
+            cur_plus_noise = coef_Xt * x_cur + coef_eps * randn_like(x_cur)
+            x_next = coef_X0 * x0_hat + cur_plus_noise
 
+            ######## Apply 2nd order (Heun) correction.
+            denoised = net(x_next, t_next, class_labels).to(torch.float64)
+            x_next = coef_X0*(denoised + x0_hat)/2 + cur_plus_noise
+            
             continue   # continue makes the code skip the original loop below, so the new schedule part is only executed here
 
             ######################THE ORIGINAL SCHEDULE
@@ -155,6 +142,7 @@ def edm_sampler(
         # For the EDM probability-flow ODE, dx/dσ = (x - X0)/σ. Replacing X0 by denoised gives this slope.
 
         x_next = x_hat + (t_next - t_hat) * d_cur
+        #x_next = t_next/t_hat * x_hat + (1 - t_next/t_hat) * denoised  # eqivalently
         # Explicit Euler update: move from σ = t_hat down to the scheduled next σ = t_next using slope d_cur.
 
         ####### Apply 2nd order (Heun) correction.
