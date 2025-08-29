@@ -36,11 +36,6 @@ def edm_sampler(
     sigma_min = max(sigma_min, net.sigma_min)
     sigma_max = min(sigma_max, net.sigma_max)
 
-    alt_sigma_max = 6    #the alternative schedule
-    alt_sigma_min = sigma_min
-    sigma_min = alt_sigma_max
-
-    ############ Time step discretization.
     step_indices = torch.arange(num_steps, dtype=torch.float64, device=latents.device)
     # Create the index vector [0, 1, ..., num_steps-1] on the same device as latents, in float64.
     # We’ll use these indices to build the noise schedule.
@@ -49,20 +44,39 @@ def edm_sampler(
     # This is the Karras (EDM) sigma schedule.
     # It linearly interpolates between sigma_max^(1/ρ) and sigma_min^(1/ρ) and then raises back to the power ρ.
     # Result: a monotone decreasing sequence from sigma_max down to sigma_min, spaced more densely at small sigmas when ρ>1 (commonly ρ=7).
-    print("Original steps:", t_steps.cpu().numpy())
-    t_steps = torch.cat([net.round_sigma(t_steps), torch.zeros_like(t_steps[:1])]) # t_N = 0
-    # Round each sigma to the network’s supported grid (round_sigma) so the model’s preconditioning (c_in/c_out/etc.) matches training.
-    # Append an extra 0 at the end so the list length is num_steps+1.
-    print("Net-adjusted steps:", t_steps.cpu().numpy())
+    print("The most original steps:", t_steps.cpu().numpy())
 
+    alt_sigma_max = 6    #the alternative schedule
+    alt_sigma_min = 0.06
     alt_num_steps = 500
 
-    alt_step_indices = torch.arange(alt_num_steps, dtype=torch.float64, device=latents.device)
-    alt_t_steps = (alt_sigma_max ** (1 / rho) + alt_step_indices / (alt_num_steps - 1) * (
-                alt_sigma_min ** (1 / rho) - alt_sigma_max ** (1 / rho))) ** rho
-    print("Alternative steps:", alt_t_steps.cpu().numpy())
-    alt_t_steps = torch.cat([net.round_sigma(alt_t_steps), torch.zeros_like(alt_t_steps[:1])])  # t_N = 0
-    print("Net-adjusted alternative steps:", alt_t_steps.cpu().numpy())
+    # remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range
+    mask = (t_steps < alt_sigma_min) | (t_steps > alt_sigma_max)
+    t_steps_filtered = t_steps[mask]
+
+    print("Filtered steps:", t_steps_filtered.cpu().numpy())
+
+    # add to t_steps alt_num_steps between alt_sigma_max and alt_sigma_min,
+    # in correct positions, so the sequence remains descending
+    alt_indices = torch.linspace(0, 1, steps=alt_num_steps, dtype=torch.float64, device=latents.device)
+    alt_steps = (alt_sigma_max ** (1.0 / rho) + alt_indices * (
+                alt_sigma_min ** (1.0 / rho) - alt_sigma_max ** (1.0 / rho))) ** rho  # descending
+
+    # Keep original parts outside the interval
+    above = t_steps[t_steps > alt_sigma_max]
+    below = t_steps[t_steps < alt_sigma_min]
+
+    # Merge everything
+    t_steps = torch.cat([above, alt_steps, below])
+    print("Merged steps:", t_steps.cpu().numpy())
+
+    # Sanity check
+    assert torch.all(t_steps[:-1] > t_steps[1:]), "New schedule is not strictly descending!"
+
+    t_steps = torch.cat([net.round_sigma(t_steps), torch.zeros_like(t_steps[:1])])  # t_N = 0
+    # Round each sigma to the network’s supported grid (round_sigma) so the model’s preconditioning (c_in/c_out/etc.) matches training.
+    # Append an extra 0 at the end so the list length is num_steps+1.
+    print("Net-adjusted merged steps:", t_steps.cpu().numpy())
 
     ############## Main sampling loop.
     x_next = latents.to(torch.float64) * t_steps[0]
@@ -71,11 +85,49 @@ def edm_sampler(
     # Multiplying by sigma_max gives a draw from N(0, sigma_max^2 I), which is the usual EDM starting point (pure noise).
     # It’s cast to float64 to match the integrator’s dtype.
 
-################ FIRST, ORIGINAL PATH
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])): # 0, ..., N-1
         # iterate over pairs (t_cur, t_next); the final pair ends at exactly zero noise.
         x_cur = x_next
 
+        if (t_cur < alt_sigma_max) and (t_cur > alt_sigma_min):
+            sigma_t = t_cur  # it has already been rounded to the network's supported grid
+            sigma_tm1 = t_next  # next (smaller) sigma from schedule
+
+            gamma_tm1_reciprocal = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20),
+                                               max=1.0) ** 2  # == sigma_tm1 / sigma_{t}
+            eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal, min=0.0))
+
+            '''  Euler+Heun
+            # --- Deterministic Heun step on EDM drift: d = (x - D_theta)/sigma ---
+            den_t = net(x_cur, sigma_t, class_labels).to(torch.float64)
+            d_cur = (x_cur - den_t) / sigma_t
+            x_pred = x_cur + (sigma_tm1 - sigma_t) * d_cur  # Euler predictor
+
+            if i < num_steps - 1:
+                den_next = net(x_pred, sigma_tm1, class_labels).to(torch.float64)
+                d_prime = (x_pred - den_next) / sigma_tm1
+                x_mean = x_cur + (sigma_tm1 - sigma_t) * (0.5 * d_cur + 0.5 * d_prime)  # Heun corrected mean
+            else:
+                x_mean = x_pred
+
+
+            # --- Stochastic part added AFTER drift to match target transition variance ---
+            x_next = x_mean + (sigma_tm1 * eta) * randn_like(x_cur)
+            '''
+
+            # EDM net returns  ~X0 (pre/post-scaling inside)
+            x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
+
+            # (alpha==1 => coef_X0 = 1 - coef_Xt)
+            coef_Xt = gamma_tm1_reciprocal
+            coef_X0 = (1 - coef_Xt)
+            coef_eps = sigma_tm1 * eta_optim_tm1
+
+            x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
+
+            continue   # continue makes the code skip the original loop below, so the new schedule part is only executed here
+
+            ######################THE ORIGINAL SCHEDULE
         ####### Increase noise temporarily.
         gamma = min(S_churn / num_steps, np.sqrt(2) - 1) if S_min <= t_cur <= S_max else 0
         # Purpose: decide how much extra noise (“churn”) to add this step.
@@ -113,46 +165,6 @@ def edm_sampler(
 
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
             # Heun correction (2nd order): replace the Euler result by the trapezoidal rule—average of start/end slopes times the step size, applied from the same base point x_hat.
-
-###### THEN, ALTERNATIVE PATH
-    for i, (t_cur, t_next) in enumerate(zip(alt_t_steps[:-1], alt_t_steps[1:])):  # 0, ..., N-1
-        # iterate over pairs (t_cur, t_next); the final pair ends at exactly zero noise.
-        x_cur = x_next
-
-        sigma_t = t_cur  # it has already been rounded to the network's supported grid
-        sigma_tm1 = t_next  # next (smaller) sigma from schedule
-
-        gamma_tm1_reciprocal = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20),
-                                           max=1.0) ** 2  # == sigma_tm1 / sigma_{t}
-        eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal, min=0.0))
-
-        '''  Euler+Heun
-        # --- Deterministic Heun step on EDM drift: d = (x - D_theta)/sigma ---
-        den_t = net(x_cur, sigma_t, class_labels).to(torch.float64)
-        d_cur = (x_cur - den_t) / sigma_t
-        x_pred = x_cur + (sigma_tm1 - sigma_t) * d_cur  # Euler predictor
-
-        if i < num_steps - 1:
-            den_next = net(x_pred, sigma_tm1, class_labels).to(torch.float64)
-            d_prime = (x_pred - den_next) / sigma_tm1
-            x_mean = x_cur + (sigma_tm1 - sigma_t) * (0.5 * d_cur + 0.5 * d_prime)  # Heun corrected mean
-        else:
-            x_mean = x_pred
-
-
-        # --- Stochastic part added AFTER drift to match target transition variance ---
-        x_next = x_mean + (sigma_tm1 * eta) * randn_like(x_cur)
-        '''
-
-        # EDM net returns  ~X0 (pre/post-scaling inside)
-        x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
-
-        # (alpha==1 => coef_X0 = 1 - coef_Xt)
-        coef_Xt = gamma_tm1_reciprocal
-        coef_X0 = (1 - coef_Xt)
-        coef_eps = sigma_tm1 * eta_optim_tm1
-
-        x_next = coef_X0 * x0_hat + coef_Xt * x_cur + coef_eps * randn_like(x_cur)
 
 
 
