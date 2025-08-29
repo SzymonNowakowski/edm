@@ -30,7 +30,7 @@ def edm_sampler(
 
     #print all arguments
 
-    print(f"EDM sampler arguments: num_steps={num_steps}, sigma_min={sigma_min}, sigma_max={sigma_max}, rho={rho}, S_churn={S_churn}, S_min={S_min}, S_max={S_max}, S_noise={S_noise}")
+    #print(f"EDM sampler arguments: num_steps={num_steps}, sigma_min={sigma_min}, sigma_max={sigma_max}, rho={rho}, S_churn={S_churn}, S_min={S_min}, S_max={S_max}, S_noise={S_noise}")
 
     # Adjust noise levels based on what's supported by the network.
     sigma_min = max(sigma_min, net.sigma_min)
@@ -44,7 +44,8 @@ def edm_sampler(
     # This is the Karras (EDM) sigma schedule.
     # It linearly interpolates between sigma_max^(1/ρ) and sigma_min^(1/ρ) and then raises back to the power ρ.
     # Result: a monotone decreasing sequence from sigma_max down to sigma_min, spaced more densely at small sigmas when ρ>1 (commonly ρ=7).
-    print("The most original steps:", t_steps.cpu().numpy())
+
+    #print("The most original steps:", t_steps.cpu().numpy())
 
     alt_sigma_max = 6    #the alternative schedule
     alt_sigma_min = 0.06
@@ -54,7 +55,7 @@ def edm_sampler(
     mask = (t_steps < alt_sigma_min) | (t_steps > alt_sigma_max)
     t_steps_filtered = t_steps[mask]
 
-    print("Filtered steps:", t_steps_filtered.cpu().numpy())
+    #print("Filtered steps:", t_steps_filtered.cpu().numpy())
 
     # add to t_steps alt_num_steps between alt_sigma_max and alt_sigma_min,
     # in correct positions, so the sequence remains descending
@@ -68,7 +69,8 @@ def edm_sampler(
 
     # Merge everything
     t_steps = torch.cat([above, alt_steps, below])
-    print("Merged steps:", t_steps.cpu().numpy())
+
+    #print("Merged steps:", t_steps.cpu().numpy())
 
     # Sanity check
     assert torch.all(t_steps[:-1] > t_steps[1:]), "New schedule is not strictly descending!"
@@ -76,7 +78,8 @@ def edm_sampler(
     t_steps = torch.cat([net.round_sigma(t_steps), torch.zeros_like(t_steps[:1])])  # t_N = 0
     # Round each sigma to the network’s supported grid (round_sigma) so the model’s preconditioning (c_in/c_out/etc.) matches training.
     # Append an extra 0 at the end so the list length is num_steps+1.
-    print("Net-adjusted merged steps:", t_steps.cpu().numpy())
+
+    #print("Net-adjusted merged steps:", t_steps.cpu().numpy())
 
     ############## Main sampling loop.
     x_next = latents.to(torch.float64) * t_steps[0]
@@ -111,7 +114,7 @@ def edm_sampler(
             ######## Apply 2nd order (Heun) correction.
             denoised = net(x_next, t_next, class_labels).to(torch.float64)
             x_next = coef_X0*(denoised + x0_hat)/2 + cur_plus_noise
-            
+
             continue   # continue makes the code skip the original loop below, so the new schedule part is only executed here
 
             ######################THE ORIGINAL SCHEDULE
