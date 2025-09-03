@@ -112,8 +112,9 @@ def edm_sampler(
             x_next = coef_X0 * x0_hat + cur_plus_noise
 
             ######## Apply 2nd order (Heun) correction.
-            denoised = net(x_next, t_next, class_labels).to(torch.float64)
-            x_next = coef_X0*(denoised + x0_hat)/2 + cur_plus_noise
+            if i < num_steps - 1:  # Heun (prediction–correction) is only applied if there is another step after this.
+                denoised = net(x_next, t_next, class_labels).to(torch.float64)
+                x_next = coef_X0*(denoised + x0_hat)/2 + cur_plus_noise
 
             continue   # continue makes the code skip the original loop below, so the new schedule part is only executed here
 
