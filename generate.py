@@ -47,7 +47,7 @@ def edm_sampler(
 
     #print("The most original steps:", t_steps.cpu().numpy())
 
-    alt_sigma_max = 6    #the alternative schedule
+    alt_sigma_max = 8.41    #the alternative schedule
     alt_sigma_min = sigma_min
     alt_num_steps = 500
 
