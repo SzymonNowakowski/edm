@@ -47,9 +47,9 @@ def edm_sampler(
 
     #print("The most original steps:", t_steps.cpu().numpy())
 
-    alt_sigma_max = 8.41    #the alternative schedule
+    alt_sigma_max = 80    #the alternative schedule
     alt_sigma_min = 0.002
-    alt_num_steps = 1000
+    alt_num_steps = 4000
 
     # remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range
     mask = (t_steps < alt_sigma_min) | (t_steps > alt_sigma_max)
