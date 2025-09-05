@@ -97,9 +97,9 @@ def edm_sampler(
             sigma_t = t_cur  # it has already been rounded to the network's supported grid
             sigma_tm1 = t_next  # next (smaller) sigma from schedule
 
-            gamma_tm1_reciprocal_r = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20),
+            gamma_tm1_reciprocal = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20),
                                                max=1.0) ** 2  # == sigma_tm1 / sigma_{t}
-            eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal_r, min=0.0))
+            eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal, min=0.0))
             eta_used_tm1 = eta_optim_tm1 / eta_divisor
             square_root_tm1_s = torch.sqrt(1 - eta_used_tm1 ** 2)
 
@@ -107,7 +107,7 @@ def edm_sampler(
             x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
 
             # (alpha==1 => coef_X0 = 1 - coef_Xt)
-            coef_Xt = gamma_tm1_reciprocal_r * square_root_tm1_s
+            coef_Xt = gamma_tm1_reciprocal**0.5 * square_root_tm1_s  # r == gamma_tm1_reciprocal**0.5
             coef_X0 = (1 - coef_Xt)
             coef_eps = sigma_tm1 * eta_used_tm1
 
