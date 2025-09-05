@@ -50,6 +50,7 @@ def edm_sampler(
     alt_sigma_max = 80    #the alternative schedule
     alt_sigma_min = 0.002
     alt_num_steps = 4000
+    eta_divisor = 2.0  # use eta_divisor > 1.0 to reduce noise
 
     # remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range
     mask = (t_steps < alt_sigma_min) | (t_steps > alt_sigma_max)
@@ -96,17 +97,19 @@ def edm_sampler(
             sigma_t = t_cur  # it has already been rounded to the network's supported grid
             sigma_tm1 = t_next  # next (smaller) sigma from schedule
 
-            gamma_tm1_reciprocal = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20),
+            gamma_tm1_reciprocal_r = torch.clamp(sigma_tm1 / torch.clamp(sigma_t, min=1e-20),
                                                max=1.0) ** 2  # == sigma_tm1 / sigma_{t}
-            eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal, min=0.0))
+            eta_optim_tm1 = torch.sqrt(torch.clamp(1.0 - gamma_tm1_reciprocal_r, min=0.0))
+            eta_used_tm1 = eta_optim_tm1 / eta_divisor
+            square_root_tm1_s = torch.sqrt(1 - eta_used_tm1 ** 2)
 
             # EDM net returns  ~X0 (pre/post-scaling inside)
             x0_hat = net(x_cur, sigma_t, class_labels).to(torch.float64)
 
             # (alpha==1 => coef_X0 = 1 - coef_Xt)
-            coef_Xt = gamma_tm1_reciprocal
+            coef_Xt = gamma_tm1_reciprocal_r * square_root_tm1_s
             coef_X0 = (1 - coef_Xt)
-            coef_eps = sigma_tm1 * eta_optim_tm1
+            coef_eps = sigma_tm1 * eta_used_tm1
 
             cur_plus_noise = coef_Xt * x_cur + coef_eps * randn_like(x_cur)
             x_next = coef_X0 * x0_hat + cur_plus_noise
