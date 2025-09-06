@@ -50,7 +50,7 @@ def edm_sampler(
     alt_sigma_max = 80    #the alternative schedule
     alt_sigma_min = 0.002
     alt_num_steps = 4000
-    eta_divisor = 4.0  # devide the optimal eta. Use eta_divisor > 1.0 to reduce noise down from the optimal noise level
+    eta_divisor = 8.0  # devide the optimal eta. Use eta_divisor > 1.0 to reduce noise down from the optimal noise level
 
     # remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range
     mask = (t_steps < alt_sigma_min) | (t_steps > alt_sigma_max)
