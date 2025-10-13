@@ -53,10 +53,6 @@ def edm_sampler(
     eta_divisor = 16.0  # devide the optimal eta. Use eta_divisor > 1.0 to reduce noise down from the optimal noise level
 
     # remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range
-    mask = (t_steps < alt_sigma_min) | (t_steps > alt_sigma_max)
-    t_steps_filtered = t_steps[mask]
-
-    #print("Filtered steps:", t_steps_filtered.cpu().numpy())
 
     # add to t_steps alt_num_steps between alt_sigma_max and alt_sigma_min,
     # in correct positions, so the sequence remains descending
@@ -64,9 +60,11 @@ def edm_sampler(
     alt_steps = (alt_sigma_max ** (1.0 / rho) + alt_indices * (
                 alt_sigma_min ** (1.0 / rho) - alt_sigma_max ** (1.0 / rho))) ** rho  # descending
 
-    # Keep original parts outside the interval
+    # Keep original parts outside the interval (remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range)
     above = t_steps[t_steps > alt_sigma_max]
     below = t_steps[t_steps < alt_sigma_min]
+    # print("Above steps:", above.cpu().numpy())
+    # print("Below steps:", below.cpu().numpy())
 
     # Merge everything
     t_steps = torch.cat([above, alt_steps, below])

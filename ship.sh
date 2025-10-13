@@ -55,7 +55,7 @@ MARKER_PATH="${TMPDIR}/${MARKER_FILENAME}"
 # ---- pack tar.gz with files at top-level (no extra dir) ----
 mkdir -p "$DIST_DIR"
 TARBALL="${DIST_DIR}/${PROJECT}-${HASH}-${STAMP}.tar.gz"
-# pakujemy CAŁĄ zawartość TMPDIR jako top-level
+# pack the whole TMPDIR
 tar -C "$TMPDIR" -czf "$TARBALL" .
 
 echo "Created: $TARBALL"
