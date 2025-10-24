@@ -27,7 +27,125 @@ def edm_sampler(
     num_steps=18, sigma_min=0.002, sigma_max=80, rho=7,
     S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
 ):
+    pokarized_computation = True
+    if pokarized_computation:
+        dtype = torch.float64  # use float64 for the main computations
+        prepare_schedule_dtype = torch.float64  # we need 64 bit precision to compute lambda prime and integrate it accurately
 
+        num_steps = int(1e4 + 1)
+        num_steps_generate = int((num_steps - 1) / 50) + 1
+
+        # well, it looks all the way around, but later we will be reversing the time scale
+        time_min = 0.996  # 0.004 --> sigma = 80
+        time_max = 3.24e-10  # 1 - 3.24e-10 --> sigma = 0.002
+
+        # print all arguments
+        print(
+            f"Pokarized edm1 sampler arguments: num_steps={num_steps}, sigma_min={sigma_min}, sigma_max={sigma_max}, rho={rho}, S_churn={S_churn}, S_min={S_min}, S_max={S_max}, S_noise={S_noise}")
+
+        t_steps_reversed = torch.logspace(torch.log10(torch.tensor(time_max, dtype=prepare_schedule_dtype)),
+                                          torch.log10(torch.tensor(time_min, dtype=prepare_schedule_dtype)),
+                                          steps=num_steps,
+                                          dtype=prepare_schedule_dtype,
+                                          device=latents.device)
+
+        # Now reverse the time steps to get t_steps flowing from 1.0-time_min to 1.0-time_max
+        t_steps = (1.0 - t_steps_reversed).flip(0)
+
+        # t_steps = time_min + step_indices / (num_steps - 1) * (time_max - time_min)  # time flows from time_min to time_max in a linear fashion
+        # no longer in use: the schedule it produces has only small signal-to-noise ratios.
+
+        # Inverse standard normal (ppf) via torch
+        z = torch.special.ndtri(t_steps).to(dtype).to(latents.device)  # z = Φ^{-1}(t)
+
+        ring_rho_inv = torch.exp(-(-1.2 + 1.2 * z))
+
+        # in EDM schedules with alpha = 1, ring_rho = 1/sigma, so ring_rho_inv = sigma_t
+
+        # ring_lambda_prime = 1 / pdf(qnorm(t; -1.2,1.2); -1.2,1.2)
+        # For Normal(μ,σ): pdf(qnorm(t; μ,σ); μ,σ) = (1/σ) * φ(z), so 1/pdf = σ / φ(z).
+        phi_z = torch.exp(-0.5 * z ** 2) / torch.sqrt(
+            torch.tensor(2.0 * torch.pi, dtype=prepare_schedule_dtype, device=latents.device))
+        ring_lambda_prime = 1.2 / phi_z  # σ = 1.2
+
+        F_parametrization_S_t = torch.sqrt(1 + 4 * ring_rho_inv ** 2)
+        M_const = torch.max(ring_lambda_prime / F_parametrization_S_t ** 2)
+        S_t_M = F_parametrization_S_t * torch.sqrt(M_const)
+        lambda_prime = ring_lambda_prime / (S_t_M + torch.sqrt((S_t_M * S_t_M - ring_lambda_prime).clamp_min(
+            0))) ** 2  ### numerically more stable, but equivalent to the original formula (S_t_M - torch.sqrt(S_t_M ** 2 - ring_lambda_prime)) ** 2
+        # now we integrate numerically lambda_prime to get lambda with initial condition lambda(t0) = 0
+        t_starting_points = t_steps[:-1]
+        t_ending_points = t_steps[1:]
+        delta_t = t_ending_points - t_starting_points
+
+        # cumulative integral with lambda_t[0] = 0, trapezoidal rule
+        lambda_t = torch.zeros_like(t_steps, dtype=prepare_schedule_dtype)  # lambda_t[0] = 0
+        lambda_t[1:] = torch.cumsum(0.5 * (lambda_prime[:-1] + lambda_prime[1:]) * delta_t, dim=0)
+
+        lambda_t = lambda_t - torch.max(
+            lambda_t)  # substract a constant, max in this case, to make the exponential (which happens next line) more robust numerically
+
+        rho_t = torch.exp(lambda_t)  # multiplicative constant irrelevant
+
+        r_t_inv = ring_rho_inv / rho_t
+
+        # the original large number of steps was needed to be high for numerical integration accuracy
+        # now, subsample to num_steps_generate for generation
+        # first and last steps must be included
+        subsample = torch.linspace(0, num_steps - 1, steps=num_steps_generate, device=latents.device)
+        # it is integers already, but we need to explicitly cast it to use it as a subscript
+        subsample = subsample.long()
+        ring_rho_inv = ring_rho_inv[subsample]
+        r_t_inv = r_t_inv[subsample]
+
+        # This is the Karras (EDM and EDM2) sigma schedule.
+        # It linearly interpolates between sigma_max^(1/ρ) and sigma_min^(1/ρ) and then raises back to the power ρ.
+        # Result: a monotone decreasing sequence from sigma_max down to sigma_min, spaced more densely at small sigmas when ρ>1 (commonly ρ=7).
+
+        print("The sigma schedule:", ring_rho_inv.detach().cpu().numpy())
+        print("The r^-1 values:", r_t_inv.detach().cpu().numpy())
+
+        # Append an explicit final step (sigma=0) for convenience and recast to desired dtype (float32 by default)
+        ring_rho_inv = torch.cat([ring_rho_inv, torch.zeros_like(ring_rho_inv[:1])]).to(dtype)  # sigma_N = 0
+        r_t_inv = torch.cat([r_t_inv, torch.zeros_like(r_t_inv[:1])]).to(dtype)  # r^-1 = 0 at final step
+
+        x_next = latents.to(dtype) * ring_rho_inv[0]
+        # Initialize the state at the highest noise level (ring_rho_inv[0] ≈ sigma_max).
+        # noise variable is expected to be standard Gaussian noise ~ N(0, I) of shape [N, C, H, W] (or whatever your model uses).
+        # Multiplying by sigma_max gives a draw from N(0, sigma_max^2 I), which is the usual EDM2 starting point (pure noise).
+        # It’s cast to match the integrator’s dtype.
+        for i, (sigma_cur, sigma_next, r_inv_cur, r_inv_next) in enumerate(
+                zip(ring_rho_inv[:-1], ring_rho_inv[1:], r_t_inv[:-1], r_t_inv[1:])):  # 0, ..., N-1
+            x_cur = x_next
+
+            # Additional noise
+            # note in the last it adds zero noise since sigma_next = 0.
+            additional_noise = sigma_next * torch.sqrt(1 - (r_inv_next / r_inv_cur) ** 2) * randn_like(x_cur)
+
+            # Euler step.
+            denoised = net(x_cur, sigma_cur).to(dtype)
+            d_cur = (x_cur - denoised) / r_inv_cur
+            # Compute the ODE slope at (x_cur, sigm_cur).
+
+            x_next = x_cur + (r_inv_next - r_inv_cur) * d_cur
+            # equivalently: x_next = r_inv_next/r_inv_cur * x_cur + (1 - r_inv_next/r_inv_cur) * denoise(x_cur, sigma_cur)
+            # note in the last step it just moves to denoised directly since r_inv_next = 0
+
+            # Apply 2nd order correction. Note in the last step it is simply not executed
+            if i < num_steps_generate - 1:
+                denoised = net(x_next, sigma_next).to(torch.float64)
+                d_prime = (x_next - denoised) / r_inv_next
+                # Prediction: Re-evaluate the slope at the end of the interval (x_next, sigma_next).
+
+                x_next = x_next + (r_inv_next - r_inv_cur) * (0.5 * d_cur + 0.5 * d_prime)
+                # Heun correction (2nd order): replace the Euler result by the trapezoidal rule—average of start/end slopes times the step size, applied from the same base point x_hat.
+
+            x_next = x_next + additional_noise  # for the last step, it equals the denoiser without any additional noise
+
+        return x_next
+
+
+    #### NORMAL COMPUTATION, POSSIBLY WITH AN ALTERNATIVE DIFFUSED SCHEDULE
     #print all arguments
 
     #print(f"EDM sampler arguments: num_steps={num_steps}, sigma_min={sigma_min}, sigma_max={sigma_max}, rho={rho}, S_churn={S_churn}, S_min={S_min}, S_max={S_max}, S_noise={S_noise}")
@@ -49,30 +167,33 @@ def edm_sampler(
 
     alt_sigma_max = 80    #the alternative schedule
     alt_sigma_min = 0.002
-    alt_num_steps = 4000
+    alt_num_steps = 0        # >0 to enable the alternative schedule
     eta_divisor = 16.0  # devide the optimal eta. Use eta_divisor > 1.0 to reduce noise down from the optimal noise level
 
-    # remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range
+    if alt_num_steps > 0:
+        # remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range
 
-    # add to t_steps alt_num_steps between alt_sigma_max and alt_sigma_min,
-    # in correct positions, so the sequence remains descending
-    alt_indices = torch.linspace(0, 1, steps=alt_num_steps, dtype=torch.float64, device=latents.device)
-    alt_steps = (alt_sigma_max ** (1.0 / rho) + alt_indices * (
-                alt_sigma_min ** (1.0 / rho) - alt_sigma_max ** (1.0 / rho))) ** rho  # descending
+        # add to t_steps alt_num_steps between alt_sigma_max and alt_sigma_min,
+        # in correct positions, so the sequence remains descending
+        alt_indices = torch.linspace(0, 1, steps=alt_num_steps, dtype=torch.float64, device=latents.device)
+        alt_steps = (alt_sigma_max ** (1.0 / rho) + alt_indices * (
+                    alt_sigma_min ** (1.0 / rho) - alt_sigma_max ** (1.0 / rho))) ** rho  # descending
 
-    # Keep original parts outside the interval (remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range)
-    above = t_steps[t_steps > alt_sigma_max]
-    below = t_steps[t_steps < alt_sigma_min]
-    # print("Above steps:", above.cpu().numpy())
-    # print("Below steps:", below.cpu().numpy())
+        # Keep original parts outside the interval (remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range)
+        above = t_steps[t_steps > alt_sigma_max]
+        below = t_steps[t_steps < alt_sigma_min]
+        # print("Above steps:", above.cpu().numpy())
+        # print("Below steps:", below.cpu().numpy())
 
-    # Merge everything
-    t_steps = torch.cat([above, alt_steps, below])
+        # Merge everything
+        t_steps = torch.cat([above, alt_steps, below])
 
-    #print("Merged steps:", t_steps.cpu().numpy())
+        #print("Merged steps:", t_steps.cpu().numpy())
 
-    # Sanity check
-    assert torch.all(t_steps[:-1] > t_steps[1:]), "New schedule is not strictly descending!"
+        # Sanity check
+        assert torch.all(t_steps[:-1] > t_steps[1:]), "New schedule is not strictly descending!"
+    else:
+        print("Skipping alternative schedule; using original EDM t_steps.")
 
     t_steps = torch.cat([net.round_sigma(t_steps), torch.zeros_like(t_steps[:1])])  # t_N = 0
     # Round each sigma to the network’s supported grid (round_sigma) so the model’s preconditioning (c_in/c_out/etc.) matches training.
