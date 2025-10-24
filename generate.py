@@ -65,16 +65,17 @@ def edm_sampler(
 
         # ring_lambda_prime = 1 / pdf(qnorm(t; -1.2,1.2); -1.2,1.2)
         # For Normal(μ,σ): pdf(qnorm(t; μ,σ); μ,σ) = (1/σ) * φ(z), so 1/pdf = σ / φ(z).
-        phi_z = torch.exp(-0.5 * z ** 2) / torch.sqrt(
-            torch.tensor(2.0 * torch.pi, dtype=prepare_schedule_dtype, device=latents.device))
+        phi_z = torch.exp(-0.5 * z ** 2) / torch.sqrt(torch.tensor(2.0 * torch.pi, dtype=prepare_schedule_dtype, device=latents.device))
         ring_lambda_prime = 1.2 / phi_z  # σ = 1.2
 
         F_parametrization_S_t = torch.sqrt(1 + 4 * ring_rho_inv ** 2)
         M_const = torch.max(ring_lambda_prime / F_parametrization_S_t ** 2)
         S_t_M = F_parametrization_S_t * torch.sqrt(M_const)
-        lambda_prime = ring_lambda_prime / (S_t_M + torch.sqrt((S_t_M * S_t_M - ring_lambda_prime).clamp_min(
-            0))) ** 2  ### numerically more stable, but equivalent to the original formula (S_t_M - torch.sqrt(S_t_M ** 2 - ring_lambda_prime)) ** 2
+        lambda_prime = ring_lambda_prime / (S_t_M + torch.sqrt((S_t_M * S_t_M - ring_lambda_prime).clamp_min(0))) ** 2  ### numerically more stable, but equivalent to the original formula (S_t_M - torch.sqrt(S_t_M ** 2 - ring_lambda_prime)) ** 2
         # now we integrate numerically lambda_prime to get lambda with initial condition lambda(t0) = 0
+
+        print("original lambda prime values:", lambda_prime.detach().cpu().numpy())
+
         t_starting_points = t_steps[:-1]
         t_ending_points = t_steps[1:]
         delta_t = t_ending_points - t_starting_points
@@ -83,9 +84,8 @@ def edm_sampler(
         lambda_t = torch.zeros_like(t_steps, dtype=prepare_schedule_dtype)  # lambda_t[0] = 0
         lambda_t[1:] = torch.cumsum(0.5 * (lambda_prime[:-1] + lambda_prime[1:]) * delta_t, dim=0)
 
-        lambda_t = lambda_t - torch.max(
-            lambda_t)  # substract a constant, max in this case, to make the exponential (which happens next line) more robust numerically
-
+        lambda_t = lambda_t - torch.max(lambda_t)  # substract a constant, max in this case, to make the exponential (which happens next line) more robust numerically
+        print("original lambda values:", lambda_t.detach().cpu().numpy())
         rho_t = torch.exp(lambda_t)  # multiplicative constant irrelevant
 
         r_t_inv = ring_rho_inv / rho_t
