@@ -71,7 +71,7 @@ def edm_sampler(
         F_parametrization_S_t = torch.sqrt(1 + 4 * ring_rho_inv ** 2)
         M_const = torch.max(ring_lambda_prime / F_parametrization_S_t ** 2)
         S_t_M = F_parametrization_S_t * torch.sqrt(M_const)
-        lambda_prime = ring_lambda_prime / (S_t_M + torch.sqrt((S_t_M * S_t_M - ring_lambda_prime).clamp_min(0))) ** 2  ### numerically more stable, but equivalent to the original formula (S_t_M - torch.sqrt(S_t_M ** 2 - ring_lambda_prime)) ** 2
+        lambda_prime = (ring_lambda_prime / (S_t_M + torch.sqrt((S_t_M * S_t_M - ring_lambda_prime).clamp_min(0)))) ** 2  ### numerically more stable, but equivalent to the original formula (S_t_M - torch.sqrt(S_t_M ** 2 - ring_lambda_prime)) ** 2
         # now we integrate numerically lambda_prime to get lambda with initial condition lambda(t0) = 0
 
         t_starting_points = t_steps[:-1]
@@ -82,7 +82,7 @@ def edm_sampler(
         lambda_t = torch.zeros_like(t_steps, dtype=prepare_schedule_dtype)  # lambda_t[0] = 0
         lambda_t[1:] = torch.cumsum(0.5 * (lambda_prime[:-1] + lambda_prime[1:]) * delta_t, dim=0)
 
-        lambda_t = lambda_t - lambda_t[0]  # substract a constant
+        lambda_t = lambda_t - torch.max(lambda_t)  # substract a constant (max value) to avoid large exponents later
 
         rho_t = torch.exp(lambda_t)  # multiplicative constant irrelevant
 
