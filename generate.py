@@ -28,7 +28,7 @@ def edm_sampler(
     S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
 ):
     pokarized_computation = True
-    
+
     if pokarized_computation:
         dtype = torch.float64  # use float64 for the main computations
         prepare_schedule_dtype = torch.float64  # we need 64 bit precision to compute lambda prime and integrate it accurately
@@ -98,6 +98,7 @@ def edm_sampler(
         subsample = subsample.long()
         ring_rho_inv = ring_rho_inv[subsample]
         r_t_inv = r_t_inv[subsample]
+        rho_t = rho_t[subsample]
 
         # This is the Karras (EDM and EDM2) sigma schedule.
         # It linearly interpolates between sigma_max^(1/ρ) and sigma_min^(1/ρ) and then raises back to the power ρ.
@@ -105,23 +106,25 @@ def edm_sampler(
 
         print("The sigma schedule:", ring_rho_inv.detach().cpu().numpy())
         print("The r^-1 values:", r_t_inv.detach().cpu().numpy())
+        print("The rho values:", rho_t.detach().cpu().numpy())
 
         # Append an explicit final step (sigma=0) for convenience and recast to desired dtype (float32 by default)
         ring_rho_inv = torch.cat([ring_rho_inv, torch.zeros_like(ring_rho_inv[:1])]).to(dtype)  # sigma_N = 0
         r_t_inv = torch.cat([r_t_inv, torch.zeros_like(r_t_inv[:1])]).to(dtype)  # r^-1 = 0 at final step
+        rho_t = torch.cat([rho_t, rho_t[:-1]]).to(dtype)  # last rho = previous rho at final step. It doesn't matter much, because noise is not added anyway
 
         x_next = latents.to(dtype) * ring_rho_inv[0]
         # Initialize the state at the highest noise level (ring_rho_inv[0] ≈ sigma_max).
         # noise variable is expected to be standard Gaussian noise ~ N(0, I) of shape [N, C, H, W] (or whatever your model uses).
         # Multiplying by sigma_max gives a draw from N(0, sigma_max^2 I), which is the usual EDM2 starting point (pure noise).
         # It’s cast to match the integrator’s dtype.
-        for i, (sigma_cur, sigma_next, r_inv_cur, r_inv_next) in enumerate(
-                zip(ring_rho_inv[:-1], ring_rho_inv[1:], r_t_inv[:-1], r_t_inv[1:])):  # 0, ..., N-1
+        for i, (sigma_cur, sigma_next, r_inv_cur, r_inv_next, rho_cur, rho_next) in enumerate(zip(ring_rho_inv[:-1], ring_rho_inv[1:], r_t_inv[:-1], r_t_inv[1:], rho_t[:-1], rho_t[1:])):
+                          # i in 0, ..., num_steps_generate - 1
             x_cur = x_next
 
             # Additional noise
-            # note in the last it adds zero noise since sigma_next = 0.
-            additional_noise = sigma_next * torch.sqrt(1 - (r_inv_next / r_inv_cur) ** 2) * randn_like(x_cur)
+            # note in the last it adds zero noise since sigma_next = 0, regardless of rho proportion
+            additional_noise = sigma_next * torch.sqrt(1 - (rho_cur / rho_next) ** 2) * randn_like(x_cur)
 
             # Euler step.
             denoised = net(x_cur, sigma_cur).to(dtype)
