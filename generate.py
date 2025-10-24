@@ -81,13 +81,11 @@ def edm_sampler(
         delta_t = t_ending_points - t_starting_points
 
         # cumulative integral with lambda_t[0] = 0, trapezoidal rule
-        lambda_integrals = torch.zeros_like(t_steps, dtype=prepare_schedule_dtype)  # lambda_t[0] = 0
-        lambda_integrals[1:] = 0.5 * (lambda_prime[:-1] + lambda_prime[1:]) * delta_t
-        print("lambda integrals:", lambda_integrals.detach().cpu().numpy())
-        lambda_t = torch.cumsum(lambda_integrals, dim=0)
-        print("original lambda values:", lambda_t.detach().cpu().numpy())
-        lambda_t = lambda_t - torch.max(lambda_t)  # substract a constant, max in this case, to make the exponential (which happens next line) more robust numerically
-        print("shifted lambda values:", lambda_t.detach().cpu().numpy())
+        lambda_t = torch.zeros_like(t_steps, dtype=prepare_schedule_dtype)  # lambda_t[0] = 0
+        lambda_t[1:] = torch.cumsum(0.5 * (lambda_prime[:-1] + lambda_prime[1:]) * delta_t, dim=0)
+
+        lambda_t = lambda_t - lambda_t[0]  # substract a constant
+
         rho_t = torch.exp(lambda_t)  # multiplicative constant irrelevant
 
         r_t_inv = ring_rho_inv / rho_t
@@ -95,22 +93,16 @@ def edm_sampler(
         # the original large number of steps was needed to be high for numerical integration accuracy
         # now, subsample to num_steps_generate for generation
         # first and last steps must be included
-        subsample = torch.linspace(0, num_steps - 1, steps=num_steps_generate, device=latents.device)
+        subsample = torch.linspace(0, num_steps - 1, steps=num_steps_generate, device=noise.device)
         # it is integers already, but we need to explicitly cast it to use it as a subscript
         subsample = subsample.long()
         ring_rho_inv = ring_rho_inv[subsample]
         r_t_inv = r_t_inv[subsample]
         rho_t = rho_t[subsample]
-        lambda_t = lambda_t[subsample]
-        lambda_prime = lambda_prime[subsample]
-        lambda_integrals = lambda_integrals[subsample]
 
         print("The sigma schedule:", ring_rho_inv.detach().cpu().numpy())
         print("The r^-1 values:", r_t_inv.detach().cpu().numpy())
         print("The rho values:", rho_t.detach().cpu().numpy())
-        print("lambda values:", lambda_t.detach().cpu().numpy())
-        print("lambda prime values:", lambda_prime.detach().cpu().numpy())
-        print("lambda integrals:", lambda_integrals.detach().cpu().numpy())
 
         # Append an explicit final step (sigma=0) for convenience and recast to desired dtype (float32 by default)
         ring_rho_inv = torch.cat([ring_rho_inv, torch.zeros_like(ring_rho_inv[:1])]).to(dtype)  # sigma_N = 0
@@ -150,7 +142,7 @@ def edm_sampler(
                 d_prime = (x_next - denoised) / r_inv_next
                 # Prediction: Re-evaluate the slope at the end of the interval (x_next, sigma_next).
 
-                x_next = x_next + (r_inv_next - r_inv_cur) * (0.5 * d_cur + 0.5 * d_prime)
+                x_next = x_cur + (r_inv_next - r_inv_cur) * (0.5 * d_cur + 0.5 * d_prime)
                 # Heun correction (2nd order): replace the Euler result by the trapezoidal rule—average of start/end slopes times the step size, applied from the same base point x_hat.
 
             x_next = x_next + additional_noise  # for the last step, it equals the denoiser without any additional noise
