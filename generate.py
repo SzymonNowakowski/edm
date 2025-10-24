@@ -81,8 +81,10 @@ def edm_sampler(
         delta_t = t_ending_points - t_starting_points
 
         # cumulative integral with lambda_t[0] = 0, trapezoidal rule
-        lambda_t = torch.zeros_like(t_steps, dtype=prepare_schedule_dtype)  # lambda_t[0] = 0
-        lambda_t[1:] = torch.cumsum(0.5 * (lambda_prime[:-1] + lambda_prime[1:]) * delta_t, dim=0)
+        lambda_integrals = torch.zeros_like(t_steps, dtype=prepare_schedule_dtype)  # lambda_t[0] = 0
+        lambda_integrals[1:] = 0.5 * (lambda_prime[:-1] + lambda_prime[1:]) * delta_t
+        print("lambda integrals:", lambda_integrals.detach().cpu().numpy())
+        lambda_t = torch.cumsum(lambda_integrals, dim=0)
         print("original lambda values:", lambda_t.detach().cpu().numpy())
         lambda_t = lambda_t - torch.max(lambda_t)  # substract a constant, max in this case, to make the exponential (which happens next line) more robust numerically
         print("shifted lambda values:", lambda_t.detach().cpu().numpy())
@@ -101,12 +103,14 @@ def edm_sampler(
         rho_t = rho_t[subsample]
         lambda_t = lambda_t[subsample]
         lambda_prime = lambda_prime[subsample]
+        lambda_integrals = lambda_integrals[subsample]
 
         print("The sigma schedule:", ring_rho_inv.detach().cpu().numpy())
         print("The r^-1 values:", r_t_inv.detach().cpu().numpy())
         print("The rho values:", rho_t.detach().cpu().numpy())
         print("lambda values:", lambda_t.detach().cpu().numpy())
         print("lambda prime values:", lambda_prime.detach().cpu().numpy())
+        print("lambda integrals:", lambda_integrals.detach().cpu().numpy())
 
         # Append an explicit final step (sigma=0) for convenience and recast to desired dtype (float32 by default)
         ring_rho_inv = torch.cat([ring_rho_inv, torch.zeros_like(ring_rho_inv[:1])]).to(dtype)  # sigma_N = 0
