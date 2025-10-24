@@ -107,10 +107,13 @@ def edm_sampler(
         r_t_inv = torch.cat([r_t_inv, torch.zeros_like(r_t_inv[:1])]).to(dtype)  # r^-1 = 0 at final step
         rho_t = torch.cat([rho_t, rho_t[-1:]]).to(dtype)  # last rho = previous rho at final step. It doesn't matter much, because noise is not added anyway
 
+        # Sanity check
         n1 = len(ring_rho_inv)
         n2 = len(r_t_inv)
         n3 = len(rho_t)
         assert n1 == n2 == n3, f"Length mismatch: rho_inv={n1}, r_inv={n2}, rho={n3}"
+
+        print("The sigma schedule after round:", ring_rho_inv.detach().cpu().numpy())
 
         x_next = latents.to(dtype) * ring_rho_inv[0]
         # Initialize the state at the highest noise level (ring_rho_inv[0] ≈ sigma_max).
