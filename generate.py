@@ -83,9 +83,9 @@ def edm_sampler(
         # cumulative integral with lambda_t[0] = 0, trapezoidal rule
         lambda_t = torch.zeros_like(t_steps, dtype=prepare_schedule_dtype)  # lambda_t[0] = 0
         lambda_t[1:] = torch.cumsum(0.5 * (lambda_prime[:-1] + lambda_prime[1:]) * delta_t, dim=0)
-
-        lambda_t = lambda_t - torch.max(lambda_t)  # substract a constant, max in this case, to make the exponential (which happens next line) more robust numerically
         print("original lambda values:", lambda_t.detach().cpu().numpy())
+        lambda_t = lambda_t - torch.max(lambda_t)  # substract a constant, max in this case, to make the exponential (which happens next line) more robust numerically
+        print("shifted lambda values:", lambda_t.detach().cpu().numpy())
         rho_t = torch.exp(lambda_t)  # multiplicative constant irrelevant
 
         r_t_inv = ring_rho_inv / rho_t
