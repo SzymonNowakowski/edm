@@ -126,7 +126,7 @@ def edm_sampler(
             additional_noise = sigma_next * torch.sqrt(1 - (rho_cur / rho_next) ** 2) * randn_like(x_cur)
 
             # Euler step.
-            denoised = net(x_cur, sigma_cur).to(dtype)
+            denoised = net(x_cur, sigma_cur, class_labels).to(dtype)
             d_cur = (x_cur - denoised) / r_inv_cur
             # Compute the ODE slope at (x_cur, sigm_cur).
 
@@ -136,7 +136,7 @@ def edm_sampler(
 
             # Apply 2nd order correction. Note in the last step it is simply not executed
             if i < num_steps_generate - 1:
-                denoised = net(x_next, sigma_next).to(torch.float64)
+                denoised = net(x_next, sigma_next, class_labels).to(torch.float64)
                 d_prime = (x_next - denoised) / r_inv_next
                 # Prediction: Re-evaluate the slope at the end of the interval (x_next, sigma_next).
 
