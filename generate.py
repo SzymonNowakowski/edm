@@ -28,6 +28,7 @@ def edm_sampler(
     S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
 ):
     pokarized_computation = True
+    
     if pokarized_computation:
         dtype = torch.float64  # use float64 for the main computations
         prepare_schedule_dtype = torch.float64  # we need 64 bit precision to compute lambda prime and integrate it accurately
