@@ -118,8 +118,6 @@ def edm_sampler(
         n3 = len(rho_t)
         assert n1 == n2 == n3, f"Length mismatch: rho_inv={n1}, r_inv={n2}, rho={n3}"
 
-        print("The sigma schedule after round:", ring_rho_inv.detach().cpu().numpy())
-
         x_next = latents.to(dtype) * ring_rho_inv[0]
         # Initialize the state at the highest noise level (ring_rho_inv[0] ≈ sigma_max).
         # noise variable is expected to be standard Gaussian noise ~ N(0, I) of shape [N, C, H, W] (or whatever your model uses).
