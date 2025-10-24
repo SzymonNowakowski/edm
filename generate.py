@@ -99,19 +99,24 @@ def edm_sampler(
         ring_rho_inv = ring_rho_inv[subsample]
         r_t_inv = r_t_inv[subsample]
         rho_t = rho_t[subsample]
-
-        # This is the Karras (EDM and EDM2) sigma schedule.
-        # It linearly interpolates between sigma_max^(1/ρ) and sigma_min^(1/ρ) and then raises back to the power ρ.
-        # Result: a monotone decreasing sequence from sigma_max down to sigma_min, spaced more densely at small sigmas when ρ>1 (commonly ρ=7).
+        lambda_t = lambda_t[subsample]
+        lambda_prime = lambda_prime[subsample]
 
         print("The sigma schedule:", ring_rho_inv.detach().cpu().numpy())
         print("The r^-1 values:", r_t_inv.detach().cpu().numpy())
         print("The rho values:", rho_t.detach().cpu().numpy())
+        print("lambda values:", lambda_t.detach().cpu().numpy())
+        print("lambda prime values:", lambda_prime.detach().cpu().numpy())
 
         # Append an explicit final step (sigma=0) for convenience and recast to desired dtype (float32 by default)
         ring_rho_inv = torch.cat([ring_rho_inv, torch.zeros_like(ring_rho_inv[:1])]).to(dtype)  # sigma_N = 0
         r_t_inv = torch.cat([r_t_inv, torch.zeros_like(r_t_inv[:1])]).to(dtype)  # r^-1 = 0 at final step
         rho_t = torch.cat([rho_t, rho_t[-1:]]).to(dtype)  # last rho = previous rho at final step. It doesn't matter much, because noise is not added anyway
+
+        n1 = len(ring_rho_inv)
+        n2 = len(r_t_inv)
+        n3 = len(rho_t)
+        assert n1 == n2 == n3, f"Length mismatch: rho_inv={n1}, r_inv={n2}, rho={n3}"
 
         x_next = latents.to(dtype) * ring_rho_inv[0]
         # Initialize the state at the highest noise level (ring_rho_inv[0] ≈ sigma_max).
