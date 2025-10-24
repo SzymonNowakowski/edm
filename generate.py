@@ -74,8 +74,6 @@ def edm_sampler(
         lambda_prime = ring_lambda_prime / (S_t_M + torch.sqrt((S_t_M * S_t_M - ring_lambda_prime).clamp_min(0))) ** 2  ### numerically more stable, but equivalent to the original formula (S_t_M - torch.sqrt(S_t_M ** 2 - ring_lambda_prime)) ** 2
         # now we integrate numerically lambda_prime to get lambda with initial condition lambda(t0) = 0
 
-        print("original lambda prime values:", lambda_prime.detach().cpu().numpy())
-
         t_starting_points = t_steps[:-1]
         t_ending_points = t_steps[1:]
         delta_t = t_ending_points - t_starting_points
@@ -93,7 +91,7 @@ def edm_sampler(
         # the original large number of steps was needed to be high for numerical integration accuracy
         # now, subsample to num_steps_generate for generation
         # first and last steps must be included
-        subsample = torch.linspace(0, num_steps - 1, steps=num_steps_generate, device=noise.device)
+        subsample = torch.linspace(0, num_steps - 1, steps=num_steps_generate, device=latents.device)
         # it is integers already, but we need to explicitly cast it to use it as a subscript
         subsample = subsample.long()
         ring_rho_inv = ring_rho_inv[subsample]
