@@ -189,8 +189,8 @@ def edm_sampler(
                     alt_sigma_min ** (1.0 / rho) - alt_sigma_max ** (1.0 / rho))) ** rho  # descending
 
         # Keep original parts outside the interval (remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range)
-        above = t_steps[t_steps > alt_sigma_max]
-        below = t_steps[t_steps < alt_sigma_min]
+        above = t_steps[t_steps > alt_steps[0]]
+        below = t_steps[t_steps < alt_steps[-1]]
         # print("Above steps:", above.cpu().numpy())
         # print("Below steps:", below.cpu().numpy())
 
