@@ -19,6 +19,8 @@ import PIL.Image
 import dnnlib
 from torch_utils import distributed as dist
 
+import math
+
 #----------------------------------------------------------------------------
 # Proposed EDM sampler (Algorithm 2).
 
@@ -177,7 +179,7 @@ def edm_sampler(
     alt_sigma_max = 80    #the alternative schedule
     alt_sigma_min = 0.002
     alt_num_steps = 0        # >0 to enable the alternative schedule
-    eta_divisor = 16.0  # devide the optimal eta. Use eta_divisor > 1.0 to reduce noise down from the optimal noise level
+    eta_divisor = float('inf') # divide the optimal eta; =1.0 -> optimal eta; >1.0 -> reduces noise; =float('inf') -> no noise (fallbacks to standard ODE EDM with a dedicated if statement below)
 
     if alt_num_steps > 0:
         # remove from t_steps any values inside [alt_sigma_min, alt_sigma_max] range
@@ -221,7 +223,7 @@ def edm_sampler(
         # iterate over pairs (t_cur, t_next); the final pair ends at exactly zero noise.
         x_cur = x_next
 
-        if (t_cur < alt_sigma_max) and (t_cur > alt_sigma_min):
+        if (t_cur < alt_steps[0]) and (t_cur > alt_steps[-1]) and not math.isinf(eta_divisor):    #### if eta_divisor is inf, skip alt steps, go straight to standard ODE EDM
             sigma_t = t_cur  # it has already been rounded to the network's supported grid
             sigma_tm1 = t_next  # next (smaller) sigma from schedule
 
